@@ -1,6 +1,6 @@
 -- Radar de Atraso de Obras — schema (PostgreSQL; funciona em SQLite com pequenos ajustes)
 
-CREATE TABLE incorporadoras (
+CREATE TABLE IF NOT EXISTS incorporadoras (
     id              SERIAL PRIMARY KEY,
     nome            TEXT NOT NULL,
     cnpj            TEXT UNIQUE,
@@ -9,7 +9,7 @@ CREATE TABLE incorporadoras (
     criado_em       TIMESTAMP DEFAULT NOW()
 );
 
-CREATE TABLE empreendimentos (
+CREATE TABLE IF NOT EXISTS empreendimentos (
     id                      SERIAL PRIMARY KEY,
     nome                    TEXT NOT NULL,
     incorporadora_id        INTEGER REFERENCES incorporadoras(id),
@@ -30,7 +30,7 @@ CREATE TABLE empreendimentos (
 
 -- Cada sinal bruto coletado de uma fonte, antes de virar score.
 -- Isso preserva a proveniência (link, data de coleta) exigida no ranking.
-CREATE TABLE sinais (
+CREATE TABLE IF NOT EXISTS sinais (
     id                  SERIAL PRIMARY KEY,
     empreendimento_id   INTEGER REFERENCES empreendimentos(id),
     incorporadora_id    INTEGER REFERENCES incorporadoras(id), -- sinal pode ser da empresa em geral
@@ -45,7 +45,7 @@ CREATE TABLE sinais (
 );
 
 -- Resultado calculado, uma linha por empreendimento, recalculada a cada rodada.
-CREATE TABLE ranking (
+CREATE TABLE IF NOT EXISTS ranking (
     empreendimento_id       INTEGER PRIMARY KEY REFERENCES empreendimentos(id),
     probabilidade_atraso    NUMERIC(5,2), -- 0.00 a 100.00
     grau_certeza            TEXT,         -- 'alta' | 'media' | 'baixa'
@@ -54,6 +54,6 @@ CREATE TABLE ranking (
     calculado_em            TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX idx_sinais_empreendimento ON sinais(empreendimento_id);
-CREATE INDEX idx_sinais_incorporadora ON sinais(incorporadora_id);
-CREATE INDEX idx_empreendimentos_uf_cidade ON empreendimentos(uf, cidade);
+CREATE INDEX IF NOT EXISTS idx_sinais_empreendimento ON sinais(empreendimento_id);
+CREATE INDEX IF NOT EXISTS idx_sinais_incorporadora ON sinais(incorporadora_id);
+CREATE INDEX IF NOT EXISTS idx_empreendimentos_uf_cidade ON empreendimentos(uf, cidade);
