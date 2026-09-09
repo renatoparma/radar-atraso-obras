@@ -2,17 +2,18 @@
 API do Radar de Atraso de Obras.
 """
 import os
-import sqlite3
-from datetime import date, datetime, timedelta
+from datetime import date
 from typing import Optional
 
+import psycopg2
+import psycopg2.extras
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from scoring import calcular_prazo, calcular_score
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "rao.db")
+DATABASE_URL = os.environ["DATABASE_URL"]
 
 app = FastAPI(title="Radar de Atraso de Obras")
 
@@ -51,9 +52,8 @@ def get_ranking(
     ]),
     ordem: str = Query("desc", enum=["asc", "desc"]),
 ):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT e.*, i.nome AS incorporadora_nome
@@ -65,10 +65,10 @@ def get_ranking(
     resultado = []
     hoje = date.today()
     for emp in empreendimentos:
-        cur.execute("SELECT * FROM sinais WHERE empreendimento_id = ?", (emp["id"],))
+        cur.execute("SELECT * FROM sinais WHERE empreendimento_id = %s", (emp["id"],))
         sinais_rows = [dict(r) for r in cur.fetchall()]
 
-        data_prevista = datetime.strptime(emp["data_prevista_entrega"], "%Y-%m-%d").date()
+        data_prevista = emp["data_prevista_entrega"]
         dias = calcular_prazo(data_prevista, emp["tolerancia_dias"], hoje)
         score = calcular_score(dias, bool(emp["habite_se_emitido"]), sinais_rows, hoje)
 
@@ -79,7 +79,7 @@ def get_ranking(
             "cidade": emp["cidade"],
             "uf": emp["uf"],
             "data_prevista_entrega": data_prevista,
-            "data_limite_tolerancia": data_prevista + timedelta(days=emp["tolerancia_dias"]),
+            "data_limite_tolerancia": emp["data_limite_tolerancia"],
             "dias_para_vencer_ou_atraso": score.dias_para_vencer_ou_atraso,
             "probabilidade_atraso": score.probabilidade,
             "grau_certeza": score.grau_certeza,
