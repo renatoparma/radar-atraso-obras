@@ -29,14 +29,15 @@ class ItemRanking(BaseModel):
     empreendimento_id: int
     empreendimento: str
     incorporadora: str
-    cidade: str
-    uf: str
-    data_prevista_entrega: date
-    data_limite_tolerancia: date
-    dias_para_vencer_ou_atraso: int
+    cidade: Optional[str] = None
+    uf: Optional[str] = None
+    data_prevista_entrega: Optional[date] = None
+    data_limite_tolerancia: Optional[date] = None
+    dias_para_vencer_ou_atraso: Optional[int] = None
     probabilidade_atraso: float
     grau_certeza: str
     status: str
+    origem: str = "cadastro"
     fontes: list[dict]
 
 
@@ -69,7 +70,7 @@ def get_ranking(
         sinais_rows = [dict(r) for r in cur.fetchall()]
 
         data_prevista = emp["data_prevista_entrega"]
-        dias = calcular_prazo(data_prevista, emp["tolerancia_dias"], hoje)
+        dias = calcular_prazo(data_prevista, emp["tolerancia_dias"], hoje) if data_prevista else None
         score = calcular_score(dias, bool(emp["habite_se_emitido"]), sinais_rows, hoje)
 
         item = {
@@ -84,6 +85,7 @@ def get_ranking(
             "probabilidade_atraso": score.probabilidade,
             "grau_certeza": score.grau_certeza,
             "status": emp["status"],
+            "origem": "cadastro" if data_prevista else "descoberta",
             "fontes": [
                 {"fonte": s["fonte"], "url_fonte": s["url_fonte"], "resumo": s["resumo"], "data_publicacao": s["data_publicacao"]}
                 for s in sinais_rows
@@ -92,7 +94,7 @@ def get_ranking(
 
         if uf and emp["uf"] != uf:
             continue
-        if cidade and cidade.lower() not in emp["cidade"].lower():
+        if cidade and (not emp["cidade"] or cidade.lower() not in emp["cidade"].lower()):
             continue
         if incorporadora and incorporadora.lower() not in emp["incorporadora_nome"].lower():
             continue
@@ -106,7 +108,7 @@ def get_ranking(
     conn.close()
 
     reverso = (ordem == "desc")
-    resultado.sort(key=lambda x: x[ordenar_por], reverse=reverso)
+    resultado.sort(key=lambda x: (x[ordenar_por] is None, x[ordenar_por] if x[ordenar_por] is not None else 0), reverse=reverso)
     return resultado
 
 
