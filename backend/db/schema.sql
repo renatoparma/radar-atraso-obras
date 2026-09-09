@@ -20,7 +20,7 @@ CREATE TABLE empreendimentos (
     financiamento_mcmv      BOOLEAN DEFAULT FALSE,
     data_prevista_entrega   DATE,        -- do memorial de incorporação/contrato padrão
     tolerancia_dias         INTEGER DEFAULT 180,
-    data_limite_tolerancia  DATE GENERATED ALWAYS AS (data_prevista_entrega + tolerancia_dias * INTERVAL '1 day') STORED,
+    data_limite_tolerancia  DATE GENERATED ALWAYS AS (data_prevista_entrega + tolerancia_dias) STORED,
     habite_se_emitido       BOOLEAN DEFAULT FALSE,
     habite_se_data          DATE,
     status                  TEXT DEFAULT 'em_obra', -- em_obra | habite_se | entregue | notificado | judicializado
