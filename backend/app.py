@@ -18,7 +18,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from coletores import coletar_gdelt, coletar_querido_diario, coletar_cvm
+from coletores import coletar_gdelt, coletar_querido_diario, coletar_cvm, coletar_reclame_aqui, coletar_mrv
 from scoring import calcular_prazo, calcular_score
 
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -139,7 +139,7 @@ def refresh():
     conn.autocommit = False
     cur = conn.cursor()
 
-    resultado = {"gdelt": 0, "querido_diario": 0, "cvm": 0}
+    resultado = {"gdelt": 0, "querido_diario": 0, "cvm": 0, "reclame_aqui": 0, "mrv": 0}
     try:
         resultado["gdelt"] = coletar_gdelt(cur)
         conn.commit()
@@ -148,6 +148,12 @@ def refresh():
         conn.commit()
 
         resultado["cvm"] = coletar_cvm(cur)
+        conn.commit()
+
+        resultado["reclame_aqui"] = coletar_reclame_aqui(cur)
+        conn.commit()
+
+        resultado["mrv"] = coletar_mrv(cur)
         conn.commit()
     except Exception as e:
         conn.rollback()
