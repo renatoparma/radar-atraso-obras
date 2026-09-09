@@ -175,7 +175,7 @@ def coletar_gdelt(cur, timeout: int = 25) -> int:
                 incorp_id = obter_ou_criar_incorporadora(cur, "A identificar")
                 emp_id = obter_ou_criar_empreendimento(cur, nome, incorp_id, cidade)
                 if gravar_sinal(cur, emp_id, "gdelt", "noticia_negativa", "negativo",
-                                titulo, a.get("url", url), a.get("seendate")):
+                                titulo, a.get("url") or url, a.get("seendate")):
                     novos += 1
     return novos
 
@@ -213,7 +213,7 @@ def coletar_querido_diario(cur, timeout: int = 25) -> int:
                 incorp_id = obter_ou_criar_incorporadora(cur, "A identificar")
                 emp_id = obter_ou_criar_empreendimento(cur, nome, incorp_id, cidade)
                 if gravar_sinal(cur, emp_id, "querido_diario", "edital", "negativo",
-                                trecho, g.get("url", url_sem_data), g.get("date")):
+                                trecho, g.get("url") or url_sem_data, g.get("date")):
                     novos += 1
     return novos
 
@@ -256,23 +256,27 @@ def coletar_mrv(cur, timeout: int = 30) -> int:
 
         incorp_id = obter_ou_criar_incorporadora(cur, "MRV")
         for item in items:
-            nome = html_mod.unescape(item.get("nomeImovel", "")).strip()
-            if not nome:
+            try:
+                nome = html_mod.unescape(item.get("nomeImovel", "")).strip()
+                if not nome:
+                    continue
+                cidade = html_mod.unescape(item.get("cidade", "")).replace("-", " ").strip() or None
+                status_bruto = html_mod.unescape(item.get("statusImovel", "")).lower()
+                matricula = html_mod.unescape(item.get("ri", ""))
+                endereco = html_mod.unescape(item.get("endereco", ""))
+
+                emp_id = obter_ou_criar_empreendimento(cur, nome, incorp_id, cidade)
+                cur.execute("""
+                    UPDATE empreendimentos SET matricula_imovel = %s, endereco = %s
+                    WHERE id = %s AND (matricula_imovel IS NULL OR matricula_imovel = '')
+                """, (matricula, endereco, emp_id))
+
+                resumo = f"Site da MRV informa status: {status_bruto or 'não informado'}."
+                if gravar_sinal(cur, emp_id, "site_construtora", "fase_obra", "neutro", resumo, url, None):
+                    novos += 1
+            except Exception as e:
+                print(f"[MRV] erro ao gravar item '{item.get('nomeImovel')}': {e}")
                 continue
-            cidade = html_mod.unescape(item.get("cidade", "")).replace("-", " ").strip() or None
-            status_bruto = html_mod.unescape(item.get("statusImovel", "")).lower()
-            matricula = html_mod.unescape(item.get("ri", ""))
-            endereco = html_mod.unescape(item.get("endereco", ""))
-
-            emp_id = obter_ou_criar_empreendimento(cur, nome, incorp_id, cidade)
-            cur.execute("""
-                UPDATE empreendimentos SET matricula_imovel = %s, endereco = %s
-                WHERE id = %s AND (matricula_imovel IS NULL OR matricula_imovel = '')
-            """, (matricula, endereco, emp_id))
-
-            resumo = f"Site da MRV informa status: {status_bruto or 'não informado'}."
-            if gravar_sinal(cur, emp_id, "site_construtora", "fase_obra", "neutro", resumo, url, None):
-                novos += 1
     return novos
 
 
@@ -328,12 +332,16 @@ def coletar_reclame_aqui(cur, timeout: int = 20) -> int:
         if not sinais_empresa:
             continue
 
-        incorp_id = obter_ou_criar_incorporadora(cur, nome_empresa)
-        emp_id = obter_ou_criar_empreendimento_generico(cur, incorp_id, nome_empresa)
-        for s in sinais_empresa:
-            if gravar_sinal(cur, emp_id, "reclame_aqui", "reclamacao", "negativo",
-                             s["resumo"], s["url_fonte"], None):
-                novos += 1
+        try:
+            incorp_id = obter_ou_criar_incorporadora(cur, nome_empresa)
+            emp_id = obter_ou_criar_empreendimento_generico(cur, incorp_id, nome_empresa)
+            for s in sinais_empresa:
+                if gravar_sinal(cur, emp_id, "reclame_aqui", "reclamacao", "negativo",
+                                 s["resumo"], s["url_fonte"], None):
+                    novos += 1
+        except Exception as e:
+            print(f"[Reclame Aqui] erro ao gravar sinais de '{nome_empresa}': {e}")
+            continue
     return novos
 
 
