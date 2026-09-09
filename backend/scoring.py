@@ -15,12 +15,14 @@ CONFIABILIDADE_FONTE = {
     "redes_sociais": 1,
 }
 
+
 PESO_TIPO_SINAL = {
-    "prazo_estourado": 35,
-    "prazo_proximo": 15,
+    "prazo_estourado": 35,      # já passou da data_limite_tolerancia
+    "prazo_proximo": 15,        # dentro de 60 dias da data_limite_tolerancia
     "processo_judicial": 20,
-    "ausencia_habite_se": 10,
+    "ausencia_habite_se": 10,   # sem habite-se e já perto/passou do prazo
     "noticia_negativa": 8,
+    "edital": 12,               # notificação/edital formal — passo anterior ao processo judicial
     "reclamacao": 7,
     "mencao_social": 5,
 }
