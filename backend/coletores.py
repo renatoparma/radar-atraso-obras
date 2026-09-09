@@ -35,6 +35,23 @@ CAPITAIS_BR = [
     "Boa Vista", "Rio Branco", "Porto Velho",
 ]
 
+EMPRESAS_MONITORADAS = [
+    "MRV", "Direcional", "Tenda", "Cyrela", "Precon", "Contato Engenharia", "RNI",
+]
+
+URLS_MRV = [
+    "https://www.mrv.com.br/imoveis/minas-gerais/belo-horizonte",
+    "https://www.mrv.com.br/imoveis/minas-gerais/belo-horizonte/apartamentos-parque-canoas",
+]
+
+MAPA_STATUS_MRV_PARA_FASE = {
+    "lançamento": "fundacao",
+    "breve lançamento": "fundacao",
+    "em construção": "estrutura",
+    "pronto para morar": "entregue",
+    "entregue": "entregue",
+}
+
 TERMOS_GDELT = [
     '"atraso na entrega" apartamento OR imóvel OR residencial OR condomínio',
     '"distrato" imobiliário atraso obra',
@@ -114,6 +131,24 @@ def extrair_cidade(texto: str) -> str | None:
     return None
 
 
+def obter_ou_criar_empreendimento_generico(cur, incorporadora_id: int, nome_incorporadora: str) -> int:
+    """
+    Para sinais que são "da empresa em geral" (CVM, Reclame Aqui), não de
+    um empreendimento específico: usa o primeiro empreendimento já
+    cadastrado dessa incorporadora, ou cria um registro genérico "guarda-
+    -chuva" se ainda não existir nenhum, pra não perder o sinal.
+    """
+    cur.execute("SELECT id FROM empreendimentos WHERE incorporadora_id = %s LIMIT 1", (incorporadora_id,))
+    row = cur.fetchone()
+    if row:
+        return row[0]
+    cur.execute("""
+        INSERT INTO empreendimentos (nome, incorporadora_id, status)
+        VALUES (%s, %s, 'em_obra') RETURNING id
+    """, (f"{nome_incorporadora} — sinal geral (empreendimento específico ainda não identificado)", incorporadora_id))
+    return cur.fetchone()[0]
+
+
 def coletar_gdelt(cur, timeout: int = 25) -> int:
     novos = 0
     for termo in TERMOS_GDELT:
@@ -183,6 +218,125 @@ def coletar_querido_diario(cur, timeout: int = 25) -> int:
     return novos
 
 
+def coletar_mrv(cur, timeout: int = 30) -> int:
+    """
+    Confirmado contra uma página real de empreendimento da MRV (enviada
+    por você): existe um bloco <script id="mrv-property-details"
+    type="application/json"> com dados estruturados — nome, cidade,
+    status ("Em Construção" etc.), endereço e até a matrícula no cartório.
+    Não tem data de entrega/lançamento nessa fonte — só a fase atual.
+
+    A URL de listagem por cidade (URLS_MRV[0]) não foi confirmada ainda —
+    é uma suposição de que ela retorna vários "items" no mesmo formato.
+    Se não achar nada nela, pode ser que o formato seja diferente.
+    """
+    import html as html_mod
+    import json
+    import re as re_mod
+
+    novos = 0
+    for url in URLS_MRV:
+        try:
+            resp = requests.get(url, timeout=timeout, headers={
+                "User-Agent": "Mozilla/5.0 (compatível; pesquisa-atraso-obras/1.0)"
+            })
+            resp.raise_for_status()
+            m = re_mod.search(
+                r'<script id="mrv-property-details" type="application/json">(.*?)</script>',
+                resp.text, re_mod.S
+            )
+            if not m:
+                print(f"[MRV] bloco de dados não encontrado em {url}")
+                continue
+            data = json.loads(m.group(1))
+            items = data.get("empreendimentosList", {}).get("items", [])
+        except Exception as e:
+            print(f"[MRV] erro ao processar {url}: {e}")
+            continue
+
+        incorp_id = obter_ou_criar_incorporadora(cur, "MRV")
+        for item in items:
+            nome = html_mod.unescape(item.get("nomeImovel", "")).strip()
+            if not nome:
+                continue
+            cidade = html_mod.unescape(item.get("cidade", "")).replace("-", " ").strip() or None
+            status_bruto = html_mod.unescape(item.get("statusImovel", "")).lower()
+            matricula = html_mod.unescape(item.get("ri", ""))
+            endereco = html_mod.unescape(item.get("endereco", ""))
+
+            emp_id = obter_ou_criar_empreendimento(cur, nome, incorp_id, cidade)
+            cur.execute("""
+                UPDATE empreendimentos SET matricula_imovel = %s, endereco = %s
+                WHERE id = %s AND (matricula_imovel IS NULL OR matricula_imovel = '')
+            """, (matricula, endereco, emp_id))
+
+            resumo = f"Site da MRV informa status: {status_bruto or 'não informado'}."
+            if gravar_sinal(cur, emp_id, "site_construtora", "fase_obra", "neutro", resumo, url, None):
+                novos += 1
+    return novos
+
+
+def coletar_reclame_aqui(cur, timeout: int = 20) -> int:
+    """
+    ⚠️ Scraping direto do Reclame Aqui contraria os Termos de Uso dele —
+    ligado aqui porque você, como advogado, avaliou e decidiu assumir
+    esse risco. Não tenho como confirmar os seletores HTML contra o site
+    de hoje (sem acesso à internet aqui); se parar de achar reclamações,
+    é provável que a estrutura da página tenha mudado.
+    """
+    import re as re_mod
+    import time
+    from bs4 import BeautifulSoup
+
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    palavras_atraso = ["atraso", "entrega", "não entreg", "obra", "prazo"]
+
+    def slug_empresa(nome):
+        s = nome.lower().strip()
+        s = re_mod.sub(r"[^a-z0-9\s-]", "", s)
+        s = re_mod.sub(r"\s+", "-", s)
+        return s
+
+    novos = 0
+    for nome_empresa in EMPRESAS_MONITORADAS:
+        slug = slug_empresa(nome_empresa)
+        sinais_empresa = []
+        try:
+            for pagina in range(1, 3):
+                url = f"https://www.reclameaqui.com.br/empresa/{slug}/lista-reclamacoes/?pagina={pagina}"
+                resp = requests.get(url, headers=headers, timeout=timeout)
+                if resp.status_code != 200:
+                    break
+                soup = BeautifulSoup(resp.text, "html.parser")
+                cards = soup.select("[data-testid='complaint-card']") or soup.select(".complaint-card")
+                if not cards:
+                    break
+                for card in cards:
+                    texto = card.get_text(" ", strip=True)
+                    if not any(p in texto.lower() for p in palavras_atraso):
+                        continue
+                    link = card.select_one("a")
+                    sinais_empresa.append({
+                        "resumo": texto[:400],
+                        "url_fonte": f"https://www.reclameaqui.com.br{link['href']}" if link and link.get("href") else url,
+                    })
+                time.sleep(2)
+        except Exception as e:
+            print(f"[Reclame Aqui] erro ao buscar '{nome_empresa}': {e}")
+            continue
+
+        if not sinais_empresa:
+            continue
+
+        incorp_id = obter_ou_criar_incorporadora(cur, nome_empresa)
+        emp_id = obter_ou_criar_empreendimento_generico(cur, incorp_id, nome_empresa)
+        for s in sinais_empresa:
+            if gravar_sinal(cur, emp_id, "reclame_aqui", "reclamacao", "negativo",
+                             s["resumo"], s["url_fonte"], None):
+                novos += 1
+    return novos
+
+
 def coletar_cvm(cur, timeout: int = 40) -> int:
     novos = 0
     hoje = date.today()
@@ -217,11 +371,7 @@ def coletar_cvm(cur, timeout: int = 40) -> int:
             continue
 
         incorp_id = obter_ou_criar_incorporadora(cur, denominacao.strip() or "A identificar")
-        cur.execute("SELECT id FROM empreendimentos WHERE incorporadora_id = %s LIMIT 1", (incorp_id,))
-        row = cur.fetchone()
-        if not row:
-            continue
-        emp_id = row[0]
+        emp_id = obter_ou_criar_empreendimento_generico(cur, incorp_id, denominacao.strip() or "A identificar")
         url_doc = r.get("Link_Download") or url_zip
         if gravar_sinal(cur, emp_id, "cvm", "noticia_negativa", "negativo",
                          r.get("Assunto", "Fato relevante CVM"), url_doc, r.get("Data_Entrega")):
