@@ -39,11 +39,17 @@ TERMOS_GDELT = [
     '"atraso na entrega" apartamento OR imóvel OR residencial OR condomínio',
     '"distrato" imobiliário atraso obra',
     '"notificação extrajudicial" construtora atraso entrega',
+    '"não entregue" apartamento prazo construtora',
+    'compradores protestam atraso obra apartamento',
 ]
 TERMOS_QUERIDO_DIARIO = [
     "notificação atraso obra construtora",
     "rescisão contratual incorporadora imóvel",
+    "notificação extrajudicial atraso entrega imóvel",
+    "multa contratual atraso obra incorporadora",
 ]
+
+DIAS_JANELA_QUERIDO_DIARIO = 45  # só considera publicações dos últimos N dias
 
 PALAVRAS_CHAVE_RELEVANCIA = [
     "atraso", "atrasad", "distrato", "não entreg", "nao entreg",
@@ -140,11 +146,22 @@ def coletar_gdelt(cur, timeout: int = 25) -> int:
 
 
 def coletar_querido_diario(cur, timeout: int = 25) -> int:
+    from datetime import timedelta
+    desde = (date.today() - timedelta(days=DIAS_JANELA_QUERIDO_DIARIO)).isoformat()
+
     novos = 0
     for termo in TERMOS_QUERIDO_DIARIO:
+        gazettes = []
+        url_com_data = (
+            "https://queridodiario.ok.org.br/api/gazettes"
+            f"?querystring={requests.utils.quote(termo)}&size=50&published_since={desde}"
+        )
+        url_sem_data = f"https://queridodiario.ok.org.br/api/gazettes?querystring={requests.utils.quote(termo)}&size=50"
         try:
-            url = f"https://queridodiario.ok.org.br/api/gazettes?querystring={requests.utils.quote(termo)}&size=50"
-            resp = requests.get(url, timeout=timeout)
+            resp = requests.get(url_com_data, timeout=timeout)
+            if resp.status_code == 400:
+                # parâmetro de data pode não ser aceito nesta versão da API — tenta sem ele
+                resp = requests.get(url_sem_data, timeout=timeout)
             resp.raise_for_status()
             gazettes = resp.json().get("gazettes", [])
         except Exception as e:
@@ -161,7 +178,7 @@ def coletar_querido_diario(cur, timeout: int = 25) -> int:
                 incorp_id = obter_ou_criar_incorporadora(cur, "A identificar")
                 emp_id = obter_ou_criar_empreendimento(cur, nome, incorp_id, cidade)
                 if gravar_sinal(cur, emp_id, "querido_diario", "edital", "negativo",
-                                trecho, g.get("url", url), g.get("date")):
+                                trecho, g.get("url", url_sem_data), g.get("date")):
                     novos += 1
     return novos
 
