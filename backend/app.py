@@ -1,5 +1,12 @@
 """
 API do Radar de Atraso de Obras.
+
+Endpoints:
+  GET  /api/ranking       -> lista ranqueada, com filtros e ordenação
+  POST /api/refresh       -> dispara nova rodada de coleta + recálculo de score
+                              (aqui só o esqueleto; ligue nos coletores de sources/)
+
+Rode com: uvicorn app:app --reload
 """
 import os
 from datetime import date
@@ -11,6 +18,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from coletores import coletar_gdelt, coletar_querido_diario, coletar_cvm
 from scoring import calcular_prazo, calcular_score
 
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -19,7 +27,7 @@ app = FastAPI(title="Radar de Atraso de Obras")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # restrinja em produção
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -37,8 +45,8 @@ class ItemRanking(BaseModel):
     probabilidade_atraso: float
     grau_certeza: str
     status: str
-    origem: str = "cadastro"
-    fontes: list[dict]
+    origem: str = "cadastro"  # 'cadastro' (data conhecida) | 'descoberta' (extraído de fonte, sem data)
+    fontes: list[dict]  # [{fonte, url_fonte, resumo, data_publicacao}]
 
 
 @app.get("/api/ranking", response_model=list[ItemRanking])
@@ -53,6 +61,12 @@ def get_ranking(
     ]),
     ordem: str = Query("desc", enum=["asc", "desc"]),
 ):
+    """
+    Implementação de referência em SQLite (db/rao.db, ver db/seed_demo.py).
+    Para produção, troque por Postgres e mova o cálculo de score para um
+    job agendado que popula a tabela `ranking`, em vez de calcular a cada
+    request — aqui calculamos na hora só porque a base de teste é pequena.
+    """
     conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
@@ -92,6 +106,7 @@ def get_ranking(
             ],
         }
 
+        # filtros
         if uf and emp["uf"] != uf:
             continue
         if cidade and (not emp["cidade"] or cidade.lower() not in emp["cidade"].lower()):
@@ -114,4 +129,32 @@ def get_ranking(
 
 @app.post("/api/refresh")
 def refresh():
-    raise NotImplementedError("Ligue este endpoint aos coletores em sources/")
+    """
+    Roda os coletores (GDELT, Querido Diário, CVM) na hora e grava o que
+    achar. Pensado pra ser chamado pelo botão "Atualizar" da tela — pode
+    levar de alguns segundos a ~1-2 minutos, dependendo da resposta das
+    fontes externas.
+    """
+    conn = psycopg2.connect(DATABASE_URL)
+    conn.autocommit = False
+    cur = conn.cursor()
+
+    resultado = {"gdelt": 0, "querido_diario": 0, "cvm": 0}
+    try:
+        resultado["gdelt"] = coletar_gdelt(cur)
+        conn.commit()
+
+        resultado["querido_diario"] = coletar_querido_diario(cur)
+        conn.commit()
+
+        resultado["cvm"] = coletar_cvm(cur)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return {"erro": str(e), **resultado}
+    finally:
+        cur.close()
+        conn.close()
+
+    resultado["total"] = sum(v for k, v in resultado.items() if k != "total")
+    return resultado
