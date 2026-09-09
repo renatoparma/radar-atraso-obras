@@ -203,6 +203,13 @@ def main():
     conn.autocommit = False
     cur = conn.cursor()
 
+    cur.execute("SELECT current_database(), inet_server_addr()")
+    print(f"[DEBUG] Conectado a: {cur.fetchone()}")
+    cur.execute("SELECT COUNT(*) FROM empreendimentos")
+    print(f"[DEBUG] Empreendimentos ANTES da coleta: {cur.fetchone()[0]}")
+    cur.execute("SELECT COUNT(*) FROM sinais")
+    print(f"[DEBUG] Sinais ANTES da coleta: {cur.fetchone()[0]}")
+
     total_novos = 0
     try:
         n = coletar_gdelt(cur)
@@ -219,6 +226,13 @@ def main():
 
         conn.commit()
         print(f"Total: {total_novos} sinais novos gravados.")
+
+        cur.execute("SELECT COUNT(*) FROM empreendimentos")
+        print(f"[DEBUG] Empreendimentos DEPOIS da coleta: {cur.fetchone()[0]}")
+        cur.execute("SELECT COUNT(*) FROM sinais")
+        print(f"[DEBUG] Sinais DEPOIS da coleta: {cur.fetchone()[0]}")
+        cur.execute("SELECT id, nome, cidade FROM empreendimentos ORDER BY id DESC LIMIT 5")
+        print(f"[DEBUG] Últimos 5 empreendimentos no banco: {cur.fetchall()}")
     except Exception:
         conn.rollback()
         raise
